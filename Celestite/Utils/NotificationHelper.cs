@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Notifications;
@@ -38,8 +38,17 @@ namespace Celestite.Utils
                 Console.WriteLine(message);
         }
 
+        private static string _lastErrorMessage = string.Empty;
+        private static DateTime _lastErrorTime = DateTime.MinValue;
+
         public static void Error(string message)
         {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            var now = DateTime.UtcNow;
+            if (message == _lastErrorMessage && (now - _lastErrorTime).TotalSeconds < 2) return;
+            _lastErrorMessage = message;
+            _lastErrorTime = now;
+
             WindowTrayHelper.RequestShow();
             EnsureNotification();
             if (_notificationManager != null)
@@ -49,8 +58,17 @@ namespace Celestite.Utils
                 Console.WriteLine(message);
         }
 
+        private static string _lastWarnMessage = string.Empty;
+        private static DateTime _lastWarnTime = DateTime.MinValue;
+
         public static void Warn(string message)
         {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            var now = DateTime.UtcNow;
+            if (message == _lastWarnMessage && (now - _lastWarnTime).TotalSeconds < 2) return;
+            _lastWarnMessage = message;
+            _lastWarnTime = now;
+
             WindowTrayHelper.RequestShow();
             EnsureNotification();
             if (_notificationManager != null)

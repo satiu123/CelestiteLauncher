@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -82,12 +82,21 @@ namespace Celestite.ViewModels.Pages
 
                 IsAccountBusy = true;
 
+                var prevSecureId = HttpHelper.LoginSecureId;
+                var prevSessionId = HttpHelper.LoginSessionId;
+                var prevActAuth = HttpHelper.ActAuth;
+
                 try
                 {
                     HttpHelper.ClearCookies();
                     var loginResponse = await DmmOpenApiHelper.Login(viewModel.Email, viewModel.Password);
                     if (loginResponse.Failed)
                     {
+                        if (!string.IsNullOrEmpty(prevSecureId) && !string.IsNullOrEmpty(prevSessionId))
+                        {
+                            DmmGamePlayerApiHelper.SetUserToken(prevSecureId, prevSessionId, prevActAuth);
+                            DmmGamePlayerApiHelper.SetAgeCheckDone();
+                        }
                         NotificationHelper.Warn($"Login failed, {loginResponse.Error!.Reason}");
                         return;
                     }
@@ -105,7 +114,11 @@ namespace Celestite.ViewModels.Pages
                     };
                     ConfigUtils.PushAccountObject(acc, notPushLastLogin: true);
                     AccountObjects.Add(new AccountObjectForRenderer(acc.Email, string.Empty, acc.Id, viewModel.AutoLogin, false));
-                    DmmGamePlayerApiHelper.SetUserToken(HttpHelper.LoginSecureId, HttpHelper.LoginSessionId, HttpHelper.ActAuth);
+                    if (!string.IsNullOrEmpty(prevSecureId) && !string.IsNullOrEmpty(prevSessionId))
+                    {
+                        DmmGamePlayerApiHelper.SetUserToken(prevSecureId, prevSessionId, prevActAuth);
+                        DmmGamePlayerApiHelper.SetAgeCheckDone();
+                    }
                     NotificationHelper.Success(Localization.AddAccountSuccess);
 
                     //HttpHelper.ClearCookies();
@@ -239,7 +252,10 @@ namespace Celestite.ViewModels.Pages
                     return;
                 }
 
-                HttpHelper.ClearCookies();
+                var prevSecureId = HttpHelper.LoginSecureId;
+                var prevSessionId = HttpHelper.LoginSessionId;
+                var prevActAuth = HttpHelper.ActAuth;
+
                 LoginSessionResponse session;
                 var isValid = await DmmOpenApiHelper.CheckValidity(accountObject.LoginSecureId, accountObject.LoginSessionId, accountObject.AccessToken);
                 if (isValid)
@@ -251,12 +267,18 @@ namespace Celestite.ViewModels.Pages
                         AccessToken = accountObject.AccessToken
                     };
                 }
-                else
+                else if (!string.IsNullOrEmpty(accountObject.Email) && !string.IsNullOrEmpty(accountObject.Password))
                 {
+                    HttpHelper.ClearCookies();
                     var loginResponse = await DmmOpenApiHelper.Login(accountObject.Email, accountObject.Password);
                     if (loginResponse.Failed)
                     {
-                        NotificationHelper.Warn(loginResponse.Error!.Reason);
+                        if (!string.IsNullOrEmpty(prevSecureId) && !string.IsNullOrEmpty(prevSessionId))
+                        {
+                            DmmGamePlayerApiHelper.SetUserToken(prevSecureId, prevSessionId, prevActAuth);
+                            DmmGamePlayerApiHelper.SetAgeCheckDone();
+                        }
+                        NotificationHelper.Warn(loginResponse.Error?.Reason ?? "切换账号登录失败");
                         return;
                     }
                     session = loginResponse.Value;
@@ -264,52 +286,36 @@ namespace Celestite.ViewModels.Pages
                     accountObject.LoginSessionId = session.UniqueId;
                     accountObject.AccessToken = session.AccessToken;
                 }
+                else
+                {
+                    if (!string.IsNullOrEmpty(prevSecureId) && !string.IsNullOrEmpty(prevSessionId))
+                    {
+                        DmmGamePlayerApiHelper.SetUserToken(prevSecureId, prevSessionId, prevActAuth);
+                        DmmGamePlayerApiHelper.SetAgeCheckDone();
+                    }
+                    NotificationHelper.Warn(Localization.PasswordRequiredErrorMessage);
+                    return;
+                }
 
                 DmmGamePlayerApiHelper.SetUserToken(session.SecureId, session.UniqueId, session.AccessToken);
                 DmmGamePlayerApiHelper.SetAgeCheckDone();
                 ConfigUtils.PushAccountObject(accountObject);
 
-                //HttpHelper.ClearCookies();
-                //string accessToken;
-                //var checkTokenResponse = await DmmGamePlayerApiHelper.CheckAccessToken(accountObject.AccessToken);
-                //if (checkTokenResponse.Success && checkTokenResponse.Value.Result)
-                //{
-                //    accessToken = accountObject.AccessToken;
-                //}
-                //else
-                //{
-                //    var loginCodeResponse = await DmmOpenApiHelper.Login(accountObject.Email, accountObject.Password);
-                //    if (loginCodeResponse.Failed)
-                //    {
-                //        NotificationHelper.Warn("Get login code failed");
-                //        return;
-                //    }
-                //    var accessTokenResponse = await DmmGamePlayerApiHelper.IssueAccessToken(loginCodeResponse.Value.Code);
-                //    if (accessTokenResponse.Failed)
-                //    {
-                //        NotificationHelper.Warn("Issue access token failed");
-                //        return;
-                //    }
-                //    accessToken = accessTokenResponse.Value.AccessToken;
-                //    accountObject.AccessToken = accessToken;
-                //}
-
-                //DmmGamePlayerApiHelper.SetUserHeader(accessToken);
-                //DmmGamePlayerApiHelper.SetAgeCheckDone();
-                //ConfigUtils.PushAccountObject(accountObject);
-
                 var userInfo = await DmmGamePlayerApiHelper.GetUserInfo();
-                if (userInfo.Failed)
+                string nickName = string.Empty;
+                if (userInfo.Success && userInfo.Value?.Profile != null)
                 {
-                    NotificationHelper.Warn(userInfo.ErrorMessage!);
-                    return;
+                    nickName = userInfo.Value.Profile.Nickname;
+                    accountObject.NickName = nickName;
+                    ConfigUtils.Save();
                 }
 
                 foreach (var acc in AccountObjects)
                 {
                     if (acc.InnerGuid == innerGuid)
                     {
-                        acc.NickName = userInfo.Value.Profile.Nickname;
+                        if (!string.IsNullOrEmpty(nickName))
+                            acc.NickName = nickName;
                         acc.IsCurrent = true;
                     }
                     else

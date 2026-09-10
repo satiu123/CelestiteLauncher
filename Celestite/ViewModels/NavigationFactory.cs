@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using Avalonia.Controls;
@@ -7,11 +7,13 @@ using Celestite.Pages;
 using Celestite.Pages.Default;
 using Celestite.Utils;
 using FluentAvalonia.UI.Controls;
+using ZeroLog;
 
 namespace Celestite.ViewModels
 {
     public class NavigationFactory : INavigationPageFactory
     {
+        private static readonly Log Logger = LogManager.GetLogger("Navigation");
         private static NavigationFactory? _outerInstance;
         private static NavigationFactory? _instance;
 
@@ -40,32 +42,40 @@ namespace Celestite.ViewModels
 
         public override Control GetPageFromObject(uint target)
         {
-            if (_cachedControls.TryGetValue(target, out var control))
+            try
             {
+                if (_cachedControls.TryGetValue(target, out var control))
+                {
+                    GCUtils.CollectGeneration2();
+                    return control;
+                }
+                if (target is MainNavigation or Login) ClearCache();
+                control = target switch
+                {
+                    // 全页面
+                    Login => new LoginPage(),
+                    MainNavigation => new MainNavigationView(),
+                    DmmProfileReg => new DmmProfileRegistrationPage(),
+                    // 附属
+                    HomePage => new HomePage(),
+                    SettingsPageId => new SettingsPage(),
+                    NotificationPage => new NotificationPage(),
+                    GamesPageId => new GamesPage(),
+                    DownloadManagerPageId => new DownloadManagerPage(),
+                    MissionPage => new MissionPage(),
+                    AccountPage => new AccountPage(),
+                    // 未知页
+                    _ => throw new InvalidOperationException()
+                };
+                _cachedControls[target] = control;
                 GCUtils.CollectGeneration2();
                 return control;
             }
-            if (target is MainNavigation or Login) ClearCache();
-            control = target switch
+            catch (Exception ex)
             {
-                // 全页面
-                Login => new LoginPage(),
-                MainNavigation => new MainNavigationView(),
-                DmmProfileReg => new DmmProfileRegistrationPage(),
-                // 附属
-                HomePage => new HomePage(),
-                SettingsPageId => new SettingsPage(),
-                NotificationPage => new NotificationPage(),
-                GamesPageId => new GamesPage(),
-                DownloadManagerPageId => new DownloadManagerPage(),
-                MissionPage => new MissionPage(),
-                AccountPage => new AccountPage(),
-                // 未知页
-                _ => throw new InvalidOperationException()
-            };
-            _cachedControls[target] = control;
-            GCUtils.CollectGeneration2();
-            return control;
+                Logger.Fatal($"GetPageFromObject failed for target {target}", ex);
+                throw;
+            }
         }
 
         public void ClearCache()
@@ -81,10 +91,22 @@ namespace Celestite.ViewModels
         public void Navigate(uint target)
         {
             if (NavFrame == null)
-                throw new InvalidOperationException();
+            {
+                Logger.Error($"NavFrame is null when trying to navigate to {target}");
+                throw new InvalidOperationException($"NavFrame is null when trying to navigate to {target}");
+            }
             Dispatcher.UIThread.Invoke(() =>
             {
-                NavFrame.NavigateFromObject(target);
+                try
+                {
+                    Logger.Info($"Navigating to target {target}");
+                    NavFrame.NavigateFromObject(target);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Fatal($"NavigateFromObject failed for target {target}", ex);
+                    throw;
+                }
             });
         }
     }

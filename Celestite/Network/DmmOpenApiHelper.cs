@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -123,11 +123,7 @@ namespace Celestite.Network
                 return false;
             }
             var issueResponse = await DmmGamePlayerApiHelper.CheckAccessToken(accessToken);
-            if (issueResponse.Failed || !issueResponse.Value.Result)
-            {
-                return false;
-            }
-            return true;
+            return issueResponse.Success && issueResponse.Value.Result;
         }
 
         public static async UniTask<bool> CheckValidity(string loginSecureId, string loginSessionId)
@@ -136,22 +132,25 @@ namespace Celestite.Network
             {
                 return false;
             }
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://apidgp-gameplayer.games.dmm.com/v5/userinfo");
-            request.Headers.Add("Cookie", $"login_secure_id={loginSecureId}; login_session_id={loginSessionId}");
-            var userInfoResponse = await HttpHelper.SendRawAsync(request, DmmGamePlayerApiResponseBaseContext.Default.DmmGamePlayerApiResponseUserInfoResponse);
-            if (userInfoResponse.Failed || userInfoResponse.Value.ResultCode != DmmGamePlayerApiErrorCode.SUCCESS)
-            {
-                return false;
-            }
-            return true;
+            DmmGamePlayerApiHelper.SetUserCookies(loginSecureId, loginSessionId);
+            var userInfoResponse = await DmmGamePlayerApiHelper.GetUserInfo(silent: true);
+            return userInfoResponse.Success && userInfoResponse.Value != null;
         }
 
         public static async UniTask<bool> CheckValidity(string loginSecureId, string loginSessionId, string accessToken)
         {
-            bool isLoginTokenValid = await CheckValidity(loginSecureId, loginSessionId);
-            if (!isLoginTokenValid) return false;
-            bool isAccessTokenValid = await CheckValidity(accessToken);
-            return isAccessTokenValid;
+            if (string.IsNullOrEmpty(loginSecureId) || string.IsNullOrEmpty(loginSessionId) || string.IsNullOrEmpty(accessToken))
+            {
+                return false;
+            }
+            var isTokenValid = await CheckValidity(accessToken);
+            if (!isTokenValid)
+                return false;
+
+            DmmGamePlayerApiHelper.SetUserCookies(loginSecureId, loginSessionId);
+            DmmGamePlayerApiHelper.SetUserHeader(accessToken);
+            var userInfoResponse = await DmmGamePlayerApiHelper.GetUserInfo(silent: true);
+            return userInfoResponse.Success && userInfoResponse.Value != null;
         }
 
         public static async UniTask<DmmOpenApiResult<SessionIdResponse>> LegacyLogin(string email, string password)
@@ -182,21 +181,18 @@ namespace Celestite.Network
             if (!authResponse.Value.IsSuccessStatusCode)
                 return DmmOpenApiResult.Fail<SessionIdResponse>(new Exception($"Error auth response code: {authResponse.Value.StatusCode}"));
 
-            var cookies = HttpHelper.GlobalCookieContainer.GetAllCookies().Where(c => !c.Expired);
-            try
+            var cookies = HttpHelper.GlobalCookieContainer.GetAllCookies().Where(c => !c.Expired).ToList();
+            var secureCookie = cookies.LastOrDefault(x => x.Name == "login_secure_id");
+            var sessionCookie = cookies.LastOrDefault(x => x.Name == "login_session_id");
+            if (secureCookie == null || sessionCookie == null)
             {
-                string loginSecureId = cookies.Single(x => x.Name == "login_secure_id").Value;
-                string loginSessionId = cookies.Single(x => x.Name == "login_session_id").Value;
-                return DmmOpenApiResult.Ok(new SessionIdResponse
-                {
-                    SecureId = loginSecureId,
-                    UniqueId = loginSessionId,
-                });
+                return DmmOpenApiResult.Fail<SessionIdResponse>(new Exception("Failed to get loginSecureId or loginSessionId from response cookies"));
             }
-            catch (Exception e)
+            return DmmOpenApiResult.Ok(new SessionIdResponse
             {
-                return DmmOpenApiResult.Fail<SessionIdResponse>(new Exception($"Failed to get loginSecureId or loginSessionId, {e.Message}"));
-            }
+                SecureId = secureCookie.Value,
+                UniqueId = sessionCookie.Value,
+            });
         }
 
         //public static async UniTask<DmmOpenApiResult<TokenResponse>> Login(string email, string password)
@@ -279,6 +275,7 @@ namespace Celestite.Network
 
         public static async UniTask<DmmOpenApiResult<LoginSessionResponse>> Login(string email, string password)
         {
+            HttpHelper.RemoveUserHeader("actauth");
             var loginUrlResponse = await DmmGamePlayerApiHelper.GetAuthLoginUrl();
             if (loginUrlResponse.Failed) return DmmOpenApiResult.Fail<LoginSessionResponse>("Fail to get login url");
 
@@ -302,17 +299,15 @@ namespace Celestite.Network
             });
             if (authResponse.Failed) return DmmOpenApiResult.Fail<LoginSessionResponse>(authResponse.Exception);
 
-            string loginSecureId, loginSessionId;
-            var cookies = HttpHelper.GlobalCookieContainer.GetAllCookies().Where(c => !c.Expired);
-            try
+            var cookies = HttpHelper.GlobalCookieContainer.GetAllCookies().Where(c => !c.Expired).ToList();
+            var secureCookie = cookies.LastOrDefault(x => x.Name == "login_secure_id");
+            var sessionCookie = cookies.LastOrDefault(x => x.Name == "login_session_id");
+            if (secureCookie == null || sessionCookie == null)
             {
-                loginSecureId = cookies.Single(x => x.Name == "login_secure_id").Value;
-                loginSessionId = cookies.Single(x => x.Name == "login_session_id").Value;
+                return DmmOpenApiResult.Fail<LoginSessionResponse>(new Exception("Failed to get loginSecureId or loginSessionId from response cookies"));
             }
-            catch (Exception e)
-            {
-                return DmmOpenApiResult.Fail<LoginSessionResponse>(new Exception($"Failed to get loginSecureId or loginSessionId, {e.Message}"));
-            }
+            string loginSecureId = secureCookie.Value;
+            string loginSessionId = sessionCookie.Value;
 
             var codeResponse = await HttpHelper.GetResponseHeaderAsync(WebUtility.UrlDecode(authorizeUrl));
             if (codeResponse.Failed || codeResponse.Value.Headers.Location == null)

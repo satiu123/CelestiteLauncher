@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -10,6 +10,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Threading.Tasks;
 using Celestite.I18N;
 using Celestite.Network.Models;
 using Celestite.Utils;
@@ -24,9 +25,10 @@ namespace Celestite.Network.Downloader
     {
         private bool _isInit;
 
-        private const int MaxTasks = 16;
+        private const int MaxTasks = 8;
 
         public DownloadStatistic DownloadStatistic { get; } = statistic;
+        public Exception? LastNetworkException { get; private set; }
 
         private SemaphoreSlim _semaphore = null!;
         private CancellationTokenSource? _cts = null!;
@@ -327,57 +329,86 @@ namespace Celestite.Network.Downloader
             if (_cts!.IsCancellationRequested)
                 return;
 
-            await _semaphore.WaitAsync(_cts.Token);
-            try
+            const int maxRetries = 5;
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
-                using var request = new HttpRequestMessage();
-                request.RequestUri =
-                    new Uri(ZString.Concat(_httpClient.BaseAddress, downloadFileChunk.DownloadFileInfo.Path));
-                request.Method = HttpMethod.Get;
-                if (downloadFileChunk.Start != -1 && downloadFileChunk.End != -1 && downloadFileChunk.ChunkSize != -1)
-                    request.Headers.Range = new RangeHeaderValue(downloadFileChunk.Start, downloadFileChunk.End);
-                using var response =
-                    await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _cts.Token);
-                response.EnsureSuccessStatusCode();
+                if (_cts!.IsCancellationRequested)
+                    return;
 
-                var modifiedChunkSize = downloadFileChunk.ChunkSize;
-                if (response.Content.Headers.ContentLength != null && downloadFileChunk.ChunkSize == -1)
-                    modifiedChunkSize = response.Content.Headers.ContentLength.Value;
-
-                if (modifiedChunkSize == -1)
-                    throw new KashimaException(downloadFileChunk.DownloadFileInfo,
-                        ZString.Format("Internal Error -1 {0}", downloadFileChunk.DownloadFileInfo.LocalPath));
-
-                await using var stream = await response.Content.ReadAsStreamAsync();
-
-                using var buffer = MemoryPool<byte>.Shared.Rent(BufferSize);
-                var offset = downloadFileChunk.ChunkSize == -1 ? 0 : downloadFileChunk.Start;
-                var lastRead = 0;
+                await _semaphore.WaitAsync(_cts.Token);
                 var readSize = 0;
-                using var fileHandle = File.OpenHandle(downloadFileChunk.LocalPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Write,
-                    FileOptions.Asynchronous);
-                while (!_cts.IsCancellationRequested &&
-                       (lastRead = await stream.ReadAsync(buffer.Memory[..BufferSize], _cts.Token)) > 0)
+                try
                 {
-                    await RandomAccess.WriteAsync(fileHandle!, buffer.Memory[..lastRead], offset, _cts.Token);
-                    Interlocked.Add(ref _downloadedBytesAfterLastCheckpoint, lastRead);
-                    Interlocked.Add(ref _downloadedBytesTotal, lastRead);
-                    offset += lastRead;
-                    readSize += lastRead;
-                }
+                    using var request = new HttpRequestMessage();
+                    request.RequestUri =
+                        new Uri(ZString.Concat(_httpClient.BaseAddress, downloadFileChunk.DownloadFileInfo.Path));
+                    request.Method = HttpMethod.Get;
+                    if (downloadFileChunk.Start != -1 && downloadFileChunk.End != -1 && downloadFileChunk.ChunkSize != -1)
+                        request.Headers.Range = new RangeHeaderValue(downloadFileChunk.Start, downloadFileChunk.End);
+                    using var response =
+                        await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _cts.Token);
+                    response.EnsureSuccessStatusCode();
 
-                if (readSize != modifiedChunkSize)
-                    throw new KashimaException(downloadFileChunk.DownloadFileInfo,
-                        ZString.Format(Localization.KashimaErrorChunkSize, downloadFileChunk.DownloadFileInfo.LocalPath, downloadFileChunk.ChunkOffset, modifiedChunkSize, readSize));
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not KashimaException)
-            {
-                _cts.Cancel(true);
-                throw;
-            }
-            finally
-            {
-                _semaphore.Release();
+                    var modifiedChunkSize = downloadFileChunk.ChunkSize;
+                    if (response.Content.Headers.ContentLength != null && downloadFileChunk.ChunkSize == -1)
+                        modifiedChunkSize = response.Content.Headers.ContentLength.Value;
+
+                    if (modifiedChunkSize == -1)
+                        throw new KashimaException(downloadFileChunk.DownloadFileInfo,
+                            ZString.Format("Internal Error -1 {0}", downloadFileChunk.DownloadFileInfo.LocalPath));
+
+                    await using var stream = await response.Content.ReadAsStreamAsync(_cts.Token);
+
+                    using var buffer = MemoryPool<byte>.Shared.Rent(BufferSize);
+                    var offset = downloadFileChunk.ChunkSize == -1 ? 0 : downloadFileChunk.Start;
+                    var lastRead = 0;
+                    using var fileHandle = File.OpenHandle(downloadFileChunk.LocalPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Write,
+                        FileOptions.Asynchronous);
+                    while (!_cts.IsCancellationRequested &&
+                           (lastRead = await stream.ReadAsync(buffer.Memory[..BufferSize], _cts.Token)) > 0)
+                    {
+                        await RandomAccess.WriteAsync(fileHandle!, buffer.Memory[..lastRead], offset, _cts.Token);
+                        Interlocked.Add(ref _downloadedBytesAfterLastCheckpoint, lastRead);
+                        Interlocked.Add(ref _downloadedBytesTotal, lastRead);
+                        offset += lastRead;
+                        readSize += lastRead;
+                    }
+
+                    if (_cts.IsCancellationRequested)
+                        return;
+
+                    if (readSize != modifiedChunkSize)
+                        throw new KashimaException(downloadFileChunk.DownloadFileInfo,
+                            ZString.Format(Localization.KashimaErrorChunkSize, downloadFileChunk.DownloadFileInfo.LocalPath, downloadFileChunk.ChunkOffset, modifiedChunkSize, readSize));
+
+                    // Chunk downloaded successfully
+                    return;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    if (readSize > 0)
+                    {
+                        Interlocked.Add(ref _downloadedBytesTotal, -readSize);
+                        Interlocked.Add(ref _downloadedBytesAfterLastCheckpoint, -readSize);
+                    }
+
+                    if (attempt < maxRetries && !_cts.IsCancellationRequested)
+                    {
+                        _logger.Warn($"Download chunk failed for {downloadFileChunk.DownloadFileInfo.LocalPath} (offset {downloadFileChunk.ChunkOffset}, attempt {attempt}/{maxRetries}): {ex.Message}. Retrying...");
+                        var backoffMs = Math.Min(3000, 500 * attempt);
+                        await Task.Delay(backoffMs, _cts.Token);
+                        continue;
+                    }
+
+                    _logger.Error($"Download chunk failed for {downloadFileChunk.DownloadFileInfo.LocalPath} after {maxRetries} attempts: {ex.Message}", ex);
+                    LastNetworkException = ex;
+                    _cts.Cancel(true);
+                    throw;
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
             }
         }
 

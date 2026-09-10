@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Globalization;
@@ -211,22 +211,27 @@ namespace Celestite.ViewModels.Pages
         private CancellationTokenSource? _cancellationTokenSource = null;
         private async UniTask UpdateGameList(GameType gameType)
         {
-            GamesSource.Clear();
-            Games.Clear();
             if (_cancellationTokenSource != null)
             {
                 await _cancellationTokenSource.CancelAsync();
                 _cancellationTokenSource.Dispose();
             }
             _cancellationTokenSource = new CancellationTokenSource();
+            var token = _cancellationTokenSource.Token;
+
             var gameList = gameType switch
             {
-                GameType.Download => await DmmGamePlayerApiHelper.MyGameList(_cancellationTokenSource.Token),
-                GameType.Browser => await DmmGamePlayerApiHelper.MyBrowserGameList(_cancellationTokenSource.Token),
+                GameType.Download => await DmmGamePlayerApiHelper.MyGameList(token),
+                GameType.Browser => await DmmGamePlayerApiHelper.MyBrowserGameList(token),
                 _ => throw new NotImplementedException()
             };
+            if (token.IsCancellationRequested) return;
             if (gameList.Failed) return;
-            Dispatcher.UIThread.Invoke(() => GamesSource.AddRange(gameList.Value));
+            Dispatcher.UIThread.Invoke(() =>
+            {
+                GamesSource.Clear();
+                GamesSource.AddRange(gameList.Value);
+            });
         }
 
         partial void OnSelectedIndexChanged(GameType value)

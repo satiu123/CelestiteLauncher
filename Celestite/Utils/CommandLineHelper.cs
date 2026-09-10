@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
@@ -205,7 +205,10 @@ namespace Celestite.Utils
                     }
                     else
                     {
-                        var loginResponse = await DmmOpenApiHelper.Login(launchCommandLine.Username, launchCommandLine.Password);
+                        var username = string.IsNullOrEmpty(launchCommandLine.Username) ? accountObject.Email : launchCommandLine.Username;
+                        var password = string.IsNullOrEmpty(launchCommandLine.Password) ? accountObject.Password : launchCommandLine.Password;
+                        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password)) return false;
+                        var loginResponse = await DmmOpenApiHelper.Login(username, password);
                         if (loginResponse.Failed) return false;
                         session = loginResponse.Value;
                         accountObject.LoginSecureId = session.SecureId;

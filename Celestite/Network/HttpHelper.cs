@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -88,10 +88,24 @@ namespace Celestite.Network
             MainHttpClient.DefaultRequestHeaders.TryAddWithoutValidation(name, value);
         }
 
+        public static void RemoveUserHeader(string name)
+        {
+            MainHttpClient.DefaultRequestHeaders.Remove(name);
+        }
+
         public static void ClearCookies()
         {
             foreach (var c in (ICollection<Cookie>)GlobalCookieContainer.GetAllCookies())
                 c.Expired = true;
+        }
+
+        public static void ClearSession()
+        {
+            ClearCookies();
+            RemoveUserHeader("actauth");
+            ActAuth = string.Empty;
+            LoginSecureId = string.Empty;
+            LoginSessionId = string.Empty;
         }
         public static void PushCookieToContainer(CookieCollection cookie)
         {

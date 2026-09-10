@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Net;
 using Celestite.I18N;
@@ -37,13 +37,20 @@ namespace Celestite.Network
             if (authenticationResponse.Failed) return DmmOpenApiResult.Fail<AltHashLoginResponse>(authenticationResponse.Exception);
             if (authenticationResponse.Value.StatusCode != HttpStatusCode.OK)
                 return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.DmmLoginLocationNotFound);
-            var cookies = HttpHelper.GetAllCookies();
+            var cookies = HttpHelper.GetAllCookies().Where(c => !c.Expired).ToList();
+            var hasAltHashCookie = cookies.LastOrDefault(x => x.Name == "has_althash");
+            var altHashCookie = cookies.LastOrDefault(x => x.Name == "althash");
+            var secureCookie = cookies.LastOrDefault(x => x.Name == "login_secure_id");
+            var sessionCookie = cookies.LastOrDefault(x => x.Name == "login_session_id");
+            if (hasAltHashCookie == null || altHashCookie == null || secureCookie == null || sessionCookie == null)
+                return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.DmmLoginLocationNotFound);
+
             return DmmOpenApiResult.Ok(new AltHashLoginResponse
             {
-                HasAltHash = cookies.Single(x => x.Name == "has_althash"),
-                AltHash = cookies.Single(x => x.Name == "althash"),
-                LoginSecureId = cookies.Single(x => x.Name == "login_secure_id").Value,
-                LoginSessionId = cookies.Single(x => x.Name == "login_session_id").Value
+                HasAltHash = hasAltHashCookie,
+                AltHash = altHashCookie,
+                LoginSecureId = secureCookie.Value,
+                LoginSessionId = sessionCookie.Value
             });
         }
     }

@@ -1,6 +1,8 @@
 param (
     [string]$BuildFile = "Celestite/Build.cs",
-    [string]$CsprojFile = "Celestite.Desktop/Celestite.Desktop.csproj"
+    [string]$CsprojFile = "Celestite.Desktop/Celestite.Desktop.csproj",
+    [switch]$NoAot,
+    [switch]$UpdateWorkloads
 )
 
 try {
@@ -42,25 +44,57 @@ catch {
     exit 1
 }
 
-Write-Host "Updating .NET workloads..."
-dotnet workload update
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to update .NET workloads."
-    exit $LASTEXITCODE
+if ($UpdateWorkloads) {
+    Write-Host "Updating .NET workloads..."
+    dotnet workload update
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to update .NET workloads."
+        exit $LASTEXITCODE
+    }
+}
+
+# Determine whether NativeAOT can be used
+$hasMsvcLinker = $false
+if (-not $NoAot) {
+    if (Get-Command link.exe -ErrorAction SilentlyContinue) {
+        $hasMsvcLinker = $true
+    } else {
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if ($vsPath) {
+                $hasMsvcLinker = $true
+            }
+        }
+    }
 }
 
 # Publish Celestite.Desktop project
 Write-Host "Publishing Celestite.Desktop for Windows..."
-dotnet publish Celestite.Desktop/Celestite.Desktop.csproj `
-    -p:StripSymbols=true `
-    -p:Configuration=Release `
-    -p:SelfContained=true `
-    -p:PublishTrimmed=true `
-    -p:PublishAot=true `
-    -p:RuntimeIdentifier=win-x64 `
-    -p:DebugType=None `
-    -p:DebugSymbols=false `
-    --output ./Release/Windows
+if ($hasMsvcLinker) {
+    Write-Host "MSVC linker detected. Publishing with NativeAOT..."
+    dotnet publish Celestite.Desktop/Celestite.Desktop.csproj `
+        -p:StripSymbols=true `
+        -p:Configuration=Release `
+        -p:SelfContained=true `
+        -p:PublishTrimmed=true `
+        -p:PublishAot=true `
+        -p:RuntimeIdentifier=win-x64 `
+        -p:DebugType=None `
+        -p:DebugSymbols=false `
+        --output ./Release/Windows
+} else {
+    Write-Host "MSVC linker not found or -NoAot specified. Publishing Self-Contained SingleFile executable..."
+    dotnet publish Celestite.Desktop/Celestite.Desktop.csproj `
+        -p:Configuration=Release `
+        -p:SelfContained=true `
+        -p:PublishSingleFile=true `
+        -p:PublishAot=false `
+        -p:RuntimeIdentifier=win-x64 `
+        -p:DebugType=None `
+        -p:DebugSymbols=false `
+        --output ./Release/Windows
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to publish Celestite.Desktop."

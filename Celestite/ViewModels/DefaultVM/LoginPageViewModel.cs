@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.IO;
 using System.Security.Cryptography;
@@ -185,7 +185,7 @@ namespace Celestite.ViewModels.DefaultVM
                         AccessToken = accountObject.AccessToken
                     };
                 }
-                else
+                else if (!string.IsNullOrEmpty(accountObject.Email) && !string.IsNullOrEmpty(accountObject.Password))
                 {
                     var loginResponse = await DmmOpenApiHelper.Login(accountObject.Email, accountObject.Password);
                     if (loginResponse.Failed)
@@ -199,10 +199,16 @@ namespace Celestite.ViewModels.DefaultVM
                     accountObject.AccessToken = session.AccessToken;
                     ConfigUtils.PushAccountObject(accountObject);
                 }
+                else
+                {
+                    SetDefaultStatus();
+                    return;
+                }
 
                 DmmGamePlayerApiHelper.SetUserToken(session.SecureId, session.UniqueId, session.AccessToken);
                 DmmGamePlayerApiHelper.SetAgeCheckDone();
                 await ProcessUser();
+                return;
             }
             SetDefaultStatus();
 
@@ -366,7 +372,17 @@ namespace Celestite.ViewModels.DefaultVM
                     DmmGamePlayerApiHelper.SetUserToken(loginResult.Value.LoginSecureId, loginResult.Value.LoginSessionId, null);
                     DmmGamePlayerApiHelper.SetAgeCheckDone();
 
-                    ConfigUtils.ClearLastLogin();
+                    var dgpAccount = new AccountObject
+                    {
+                        Id = Guid.NewGuid(),
+                        Email = "DMMGamePlayer",
+                        LoginSecureId = loginResult.Value.LoginSecureId,
+                        LoginSessionId = loginResult.Value.LoginSessionId,
+                        SaveEmail = false,
+                        SavePassword = false,
+                        AutoLogin = true
+                    };
+                    ConfigUtils.PushAccountObject(dgpAccount);
                     await ProcessUser();
                     SetDefaultStatus();
                 }

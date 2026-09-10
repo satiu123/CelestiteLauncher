@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
@@ -87,7 +87,15 @@ namespace Celestite.Network.Downloader
                             Logger.Warn($"error occured when downloading {args.ProductId}: {kashimaException.Message}");
                             break;
                         case OperationCanceledException ex:
-                            NotificationHelper.Warn(Localization.DownloadIsCancelled);
+                            if (downloader is KashimaDownloaderV1 { LastNetworkException: not null } k1)
+                            {
+                                NotificationHelper.Error(ZString.Format("下载失败: {0}", k1.LastNetworkException.Message));
+                                Logger.Error($"Download failed due to network error: {k1.LastNetworkException.Message}", k1.LastNetworkException);
+                            }
+                            else
+                            {
+                                NotificationHelper.Warn(Localization.DownloadIsCancelled);
+                            }
                             break;
                         default:
                             NotificationHelper.Error(args.Exception.Message);
@@ -152,8 +160,14 @@ namespace Celestite.Network.Downloader
             {
                 NotificationHelper.Success(ZString.Format(Localization.GameDownloadStart, clInfo.Title));
 
-                downloader.InitDefault(installDir, () => new SocketsHttpHandler() { Proxy = DynamicProxyImpl.GetProxy() },
-                    false, cts.Token);
+                downloader.InitDefault(installDir, () => new SocketsHttpHandler()
+                {
+                    Proxy = DynamicProxyImpl.GetProxy(),
+                    EnableMultipleHttp2Connections = true,
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(60),
+                    ConnectTimeout = TimeSpan.FromSeconds(15)
+                }, false, cts.Token);
                 if (clInfo is InstallClInfo { HasModules: true, Modules: not null } installClInfo)
                 {
                     var moduleInstallResult = await downloader.DownloadModules(installClInfo.Modules);

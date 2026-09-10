@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -39,34 +39,26 @@ namespace Celestite.Network
         protected DmmGamePlayerApiResult(DmmGamePlayerApiErrorCode errorCode, string? error)
         {
             var success = errorCode == DmmGamePlayerApiErrorCode.SUCCESS;
-            //switch (success)
-            //{
-            //    case true when error != null:
-            //        throw new InvalidOperationException();
-            //    case false when error == null:
-            //        throw new InvalidOperationException();
-            //}
 
             ErrorCode = errorCode;
-            ErrorMessage = error;
+            ErrorMessage = error ?? errorCode.ToString();
 
             if (success) return;
-            Logger.Warn(error!);
-            NotificationHelper.Error(error!);
+            var msg = !string.IsNullOrWhiteSpace(error) ? error : $"DmmGamePlayerApi: {errorCode} ({(int)errorCode})";
+            Logger.Warn(msg);
+            if (ErrorCodeNotBroadcast.Contains(errorCode))
+            {
+                NotBroadcastErrorOccured?.Invoke(null, new DmmGamePlayerApiErrorEventArgs(ErrorCode, string.Empty, TApiGameType.GCL));
+                return;
+            }
+            NotificationHelper.Error(msg);
         }
         protected DmmGamePlayerApiResult(DmmGamePlayerApiErrorCode errorCode, string? error, string productId, TApiGameType gameType)
         {
             var success = errorCode == DmmGamePlayerApiErrorCode.SUCCESS;
-            //switch (success)
-            //{
-            //    case true when error != null:
-            //        throw new InvalidOperationException();
-            //    case false when error == null:
-            //        throw new InvalidOperationException();
-            //}
 
             ErrorCode = errorCode;
-            ErrorMessage = error;
+            ErrorMessage = error ?? errorCode.ToString();
 
             if (success) return;
             if (ErrorCodeNotBroadcast.Contains(errorCode))
@@ -74,8 +66,9 @@ namespace Celestite.Network
                 NotBroadcastErrorOccured?.Invoke(null, new DmmGamePlayerApiErrorEventArgs(ErrorCode, productId, gameType));
                 return;
             }
-            Logger.Warn(error!);
-            NotificationHelper.Error(error!);
+            var msg = !string.IsNullOrWhiteSpace(error) ? error : $"DmmGamePlayerApi: {errorCode} ({(int)errorCode})";
+            Logger.Warn(msg);
+            NotificationHelper.Error(msg);
         }
 
         protected DmmGamePlayerApiResult(Exception error)
@@ -198,6 +191,17 @@ namespace Celestite.Network
             HttpHelper.ActAuth = actauth;
         }
 
+        public static void ClearUserHeader()
+        {
+            HttpHelper.RemoveUserHeader(UserHeaderName);
+            HttpHelper.ActAuth = string.Empty;
+        }
+
+        public static void ClearSession()
+        {
+            HttpHelper.ClearSession();
+        }
+
         public static void SetUserCookies(string secureId, string sessionId)
         {
             foreach (Cookie c in HttpHelper.GlobalCookieContainer.GetAllCookies())
@@ -293,12 +297,20 @@ namespace Celestite.Network
             }
         }
 
-        public static async UniTask<DmmGamePlayerApiResult<UserInfoResponse>> GetUserInfo()
+        public static async UniTask<DmmGamePlayerApiResult<UserInfoResponse>> GetUserInfo(bool silent = false)
         {
             var response = await HttpHelper.DgpPostJsonAsync("/v5/userinfo", UserOsBaseRequest.Empty, DmmGamePlayerApiRequestBaseContext.Default.UserOsBaseRequest,
                 DmmGamePlayerApiResponseBaseContext.Default.DmmGamePlayerApiResponseUserInfoResponse);
             if (response.Failed)
                 return DmmGamePlayerApiResult.Fail<UserInfoResponse>(response.Exception);
+            if (response.Value.ResultCode != DmmGamePlayerApiErrorCode.SUCCESS)
+            {
+                if (silent)
+                {
+                    Logger.Info($"GetUserInfo silent check failed: {response.Value.ResultCode}");
+                    return DmmGamePlayerApiResult.Fail<UserInfoResponse>(new Exception($"UserInfo check failed: {response.Value.ResultCode}"));
+                }
+            }
             CurrentUserInfo = response.Value.Data;
             UserInfoChangedEvent?.Invoke(response.Value.Data, EventArgs.Empty);
 
@@ -336,7 +348,14 @@ namespace Celestite.Network
             }
             var response = await HttpHelper.DgpPostJsonAsync("/v5/auth/accesstoken/check", new CheckAccessTokenRequest { AccessToken = accessToken }, DmmGamePlayerApiRequestBaseContext.Default.CheckAccessTokenRequest,
                 DmmGamePlayerApiResponseBaseContext.Default.DmmGamePlayerApiResponseCheckAccessTokenResponse);
-            return response.Failed ? DmmGamePlayerApiResult.Fail<CheckAccessTokenResponse>(response.Exception) : DmmGamePlayerApiResult.Ok(response.Value);
+            if (response.Failed)
+                return DmmGamePlayerApiResult.Fail<CheckAccessTokenResponse>(response.Exception);
+            if (response.Value.ResultCode != DmmGamePlayerApiErrorCode.SUCCESS)
+            {
+                Logger.Info($"CheckAccessToken: token is invalid or expired (ResultCode: {response.Value.ResultCode})");
+                return DmmGamePlayerApiResult.Ok(new CheckAccessTokenResponse { Result = false });
+            }
+            return DmmGamePlayerApiResult.Ok(response.Value);
         }
 
         public static async UniTask<DmmGamePlayerApiResult<List<AnnounceInfo>>> AnnounceInfo()
