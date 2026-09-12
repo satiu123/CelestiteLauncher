@@ -16,9 +16,9 @@
     <Product>Celestite Launcher</Product>
     <Description>Celestite Launcher</Description>
     <Copyright>Copyright © 2026 Kengxxiao</Copyright>
-    <Version>2.0.25200.2</Version>
-    <FileVersion>2.0.25200.2</FileVersion>
-    <InformationalVersion>2.0.25200.2</InformationalVersion>
+    <Version>2.0.25200.3</Version>
+    <FileVersion>2.0.25200.3</FileVersion>
+    <InformationalVersion>2.0.25200.3</InformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('linux'))">
@@ -50,4 +50,7 @@
     <ProjectReference Include="..\Celestite\Celestite.csproj" />
   </ItemGroup>
 </Project>
+
+
+
 

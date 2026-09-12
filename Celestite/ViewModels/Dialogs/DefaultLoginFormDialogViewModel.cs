@@ -1,4 +1,4 @@
-﻿using Celestite.Utils;
+using Celestite.Utils;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace Celestite.ViewModels.Dialogs
@@ -10,9 +10,9 @@ namespace Celestite.ViewModels.Dialogs
         [ObservableProperty]
         private string _password = string.Empty;
 
-        [ObservableProperty] private bool _saveEmail;
-        [ObservableProperty] private bool _savePassword;
-        [ObservableProperty] private bool _autoLogin;
+        [ObservableProperty] private bool _saveEmail = true;
+        [ObservableProperty] private bool _savePassword = true;
+        [ObservableProperty] private bool _autoLogin = true;
 
         [ObservableProperty] private string[] _autoCompleteItems = ConfigUtils.GetAllSavedEmails();
 
@@ -36,13 +36,36 @@ namespace Celestite.ViewModels.Dialogs
         {
             LockSaveEmail = lockSave;
             LockSavePassword = lockSave;
-            SaveEmail = lockSave;
-            SavePassword = lockSave;
-            Email = string.Empty;
-            Password = string.Empty;
-            AutoLogin = false;
+            SaveEmail = true;
+            SavePassword = true;
+            AutoLogin = true;
             if (lockSave)
+            {
+                Email = string.Empty;
+                Password = string.Empty;
                 AutoCompleteItems = [];
+            }
+            else
+            {
+                AutoCompleteItems = ConfigUtils.GetAllSavedEmails();
+                if (ConfigUtils.TryGetLastLogin(out var lastLogin) && lastLogin != null && lastLogin.SaveEmail && !string.IsNullOrEmpty(lastLogin.Email))
+                {
+                    Email = lastLogin.Email;
+                    if (lastLogin.SavePassword && !string.IsNullOrEmpty(lastLogin.Password))
+                    {
+                        Password = lastLogin.Password;
+                    }
+                    else
+                    {
+                        Password = string.Empty;
+                    }
+                }
+                else
+                {
+                    Email = string.Empty;
+                    Password = string.Empty;
+                }
+            }
         }
     }
 }

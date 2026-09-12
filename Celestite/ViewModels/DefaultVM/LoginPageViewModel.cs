@@ -170,12 +170,16 @@ namespace Celestite.ViewModels.DefaultVM
         [RelayCommand]
         private async Task ProcessAutoLogin()
         {
-            if (ConfigUtils.TryGetLastLogin(out var accountObject) && accountObject!.AutoLogin)
+            if (ConfigUtils.TryGetLastLogin(out var accountObject) &&
+                (accountObject!.AutoLogin || (accountObject.SavePassword && !string.IsNullOrEmpty(accountObject.Password))))
             {
                 SetLoginStatus();
                 HttpHelper.ClearCookies();
                 LoginSessionResponse session;
-                var isValid = await DmmOpenApiHelper.CheckValidity(accountObject.LoginSecureId, accountObject.LoginSessionId, accountObject.AccessToken);
+                var isValid = !string.IsNullOrEmpty(accountObject.AccessToken)
+                    ? await DmmOpenApiHelper.CheckValidity(accountObject.LoginSecureId, accountObject.LoginSessionId, accountObject.AccessToken)
+                    : await DmmOpenApiHelper.CheckValidity(accountObject.LoginSecureId, accountObject.LoginSessionId);
+
                 if (isValid)
                 {
                     session = new LoginSessionResponse
@@ -185,7 +189,7 @@ namespace Celestite.ViewModels.DefaultVM
                         AccessToken = accountObject.AccessToken
                     };
                 }
-                else if (!string.IsNullOrEmpty(accountObject.Email) && !string.IsNullOrEmpty(accountObject.Password))
+                else if (!string.IsNullOrEmpty(accountObject.Email) && !string.IsNullOrEmpty(accountObject.Password) && accountObject.Email != "DMMGamePlayer")
                 {
                     var loginResponse = await DmmOpenApiHelper.Login(accountObject.Email, accountObject.Password);
                     if (loginResponse.Failed)
@@ -197,6 +201,26 @@ namespace Celestite.ViewModels.DefaultVM
                     accountObject.LoginSecureId = session.SecureId;
                     accountObject.LoginSessionId = session.UniqueId;
                     accountObject.AccessToken = session.AccessToken;
+                    accountObject.AutoLogin = true;
+                    ConfigUtils.PushAccountObject(accountObject);
+                }
+                else if (accountObject.Email == "DMMGamePlayer")
+                {
+                    var dgpResult = await TryDgpLoginInternal();
+                    if (dgpResult.Failed)
+                    {
+                        SetDefaultStatus();
+                        return;
+                    }
+                    session = new LoginSessionResponse
+                    {
+                        SecureId = dgpResult.Value.LoginSecureId,
+                        UniqueId = dgpResult.Value.LoginSessionId,
+                        AccessToken = string.Empty
+                    };
+                    accountObject.LoginSecureId = session.SecureId;
+                    accountObject.LoginSessionId = session.UniqueId;
+                    accountObject.AutoLogin = true;
                     ConfigUtils.PushAccountObject(accountObject);
                 }
                 else
@@ -205,12 +229,19 @@ namespace Celestite.ViewModels.DefaultVM
                     return;
                 }
 
+                if (!accountObject.AutoLogin)
+                {
+                    accountObject.AutoLogin = true;
+                    ConfigUtils.Save();
+                }
+
                 DmmGamePlayerApiHelper.SetUserToken(session.SecureId, session.UniqueId, session.AccessToken);
                 DmmGamePlayerApiHelper.SetAgeCheckDone();
                 await ProcessUser();
                 return;
             }
             SetDefaultStatus();
+        }
 
             //if (ConfigUtils.TryGetLastLogin(out var accountObject) && accountObject!.AutoLogin)
             //{
@@ -246,7 +277,6 @@ namespace Celestite.ViewModels.DefaultVM
             //    await ProcessUser();
             //}
             //SetDefaultStatus();
-        }
 
         //[RelayCommand]
         //private async Task ProcessAutoLogin()
@@ -306,6 +336,52 @@ namespace Celestite.ViewModels.DefaultVM
             }
         }
 
+        private async UniTask<DmmOpenApiResult<AltHashLoginResponse>> TryDgpLoginInternal()
+        {
+            if (!OperatingSystem.IsWindows())
+                return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.UnsupportedSystemError);
+
+            var localState = ConfigUtils.ParseLocalState();
+            if (localState == null)
+                return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.LoadLocalStateError);
+
+            if (localState.OsCrypt == null || !ConvertEncryptedKeyBase64(localState.OsCrypt.EncryptedKey, out var masterKey))
+                return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.LoadLocalStateError);
+
+            masterKey = ProtectedData.Unprotect(masterKey, null, DataProtectionScope.CurrentUser);
+            try
+            {
+                await using var sqlConnection = ConfigUtils.OpenDgpCookiesConnection();
+                var version = Meta.GetMeta(sqlConnection, "version");
+                var altHash = ElectronCookie.GetCookieByName(sqlConnection, "althash");
+                var hasAltHash = ElectronCookie.GetCookieByName(sqlConnection, "has_althash");
+                if (altHash == null || hasAltHash == null)
+                    return DmmOpenApiResult.Fail<AltHashLoginResponse>(Localization.LoggedUserNotFoundError);
+
+                var newFormat = version != null && version.Value >= 24;
+                var decryptedAltHash = DecryptCookie(altHash.EncryptedValue.AsSpan(), masterKey, newFormat);
+                var decryptedHasAltHash = DecryptCookie(hasAltHash.EncryptedValue.AsSpan(), masterKey, newFormat);
+
+                var loginResult = await DmmAltHashLoginHelper.LoginFromAltHash(decryptedAltHash, decryptedHasAltHash);
+                if (loginResult.Failed)
+                    return loginResult;
+
+                altHash.EncryptedValue = EncryptCookie(loginResult.Value.AltHash.Value, masterKey, newFormat, altHash.HostKey);
+                altHash.ExpiresUtc = (((DateTimeOffset)loginResult.Value.AltHash.Expires).ToUnixTimeSeconds() + 11644473600) * 1000000;
+                hasAltHash.EncryptedValue = EncryptCookie(loginResult.Value.HasAltHash.Value, masterKey, newFormat, hasAltHash.HostKey);
+                hasAltHash.ExpiresUtc = (((DateTimeOffset)loginResult.Value.HasAltHash.Expires).ToUnixTimeSeconds() + 11644473600) * 1000000;
+                ElectronCookie.UpdateCookie(sqlConnection, altHash);
+                ElectronCookie.UpdateCookie(sqlConnection, hasAltHash);
+
+                return loginResult;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(string.Empty, ex);
+                return DmmOpenApiResult.Fail<AltHashLoginResponse>(ex);
+            }
+        }
+
         [RelayCommand]
         private void ShowDmmLoginButton()
         {
@@ -317,57 +393,16 @@ namespace Celestite.ViewModels.DefaultVM
 
             SetLoginStatus();
 
-            var localState = ConfigUtils.ParseLocalState();
-            if (localState == null)
-            {
-                SetLoginErrorStatus(Localization.LoadLocalStateError);
-                return;
-            }
-
-            // TODO: 多系统
-            if (localState.OsCrypt == null || !ConvertEncryptedKeyBase64(localState.OsCrypt.EncryptedKey, out var masterKey))
-            {
-                SetLoginErrorStatus(Localization.LoadLocalStateError);
-                return;
-            }
-            masterKey = ProtectedData.Unprotect(masterKey, null, DataProtectionScope.CurrentUser);
             UniTask.Run(async () =>
             {
                 try
                 {
-                    await using var sqlConnection = ConfigUtils.OpenDgpCookiesConnection();
-                    var version = Meta.GetMeta(sqlConnection, "version");
-                    var altHash = ElectronCookie.GetCookieByName(sqlConnection, "althash");
-                    var hasAltHash = ElectronCookie.GetCookieByName(sqlConnection, "has_althash");
-                    if (altHash == null || hasAltHash == null)
-                    {
-                        SetLoginErrorStatus(Localization.LoggedUserNotFoundError);
-                        return;
-                    }
-
-                    var newFormat = version != null && version.Value >= 24;
-
-                    var decryptedAltHash = DecryptCookie(altHash.EncryptedValue.AsSpan(), masterKey, newFormat);
-                    var decryptedHasAltHash = DecryptCookie(hasAltHash.EncryptedValue.AsSpan(), masterKey, newFormat);
-
-                    var loginResult =
-                        await DmmAltHashLoginHelper.LoginFromAltHash(decryptedAltHash, decryptedHasAltHash);
+                    var loginResult = await TryDgpLoginInternal();
                     if (loginResult.Failed)
                     {
                         SetLoginErrorStatus(loginResult.Error!);
                         return;
                     }
-
-                    altHash.EncryptedValue = EncryptCookie(loginResult.Value.AltHash.Value, masterKey, newFormat, altHash.HostKey);
-                    altHash.ExpiresUtc =
-                        (((DateTimeOffset)loginResult.Value.AltHash.Expires).ToUnixTimeSeconds() + 11644473600) *
-                        1000000;
-                    hasAltHash.EncryptedValue = EncryptCookie(loginResult.Value.HasAltHash.Value, masterKey, newFormat, hasAltHash.HostKey);
-                    hasAltHash.ExpiresUtc =
-                        (((DateTimeOffset)loginResult.Value.HasAltHash.Expires).ToUnixTimeSeconds() + 11644473600) *
-                        1000000;
-                    ElectronCookie.UpdateCookie(sqlConnection, altHash);
-                    ElectronCookie.UpdateCookie(sqlConnection, hasAltHash);
 
                     DmmGamePlayerApiHelper.SetUserToken(loginResult.Value.LoginSecureId, loginResult.Value.LoginSessionId, null);
                     DmmGamePlayerApiHelper.SetAgeCheckDone();

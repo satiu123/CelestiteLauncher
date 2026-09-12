@@ -297,6 +297,11 @@ namespace Celestite.ViewModels.Pages
                     return;
                 }
 
+                if (accountObject.SavePassword && !string.IsNullOrEmpty(accountObject.Password))
+                {
+                    accountObject.AutoLogin = true;
+                }
+
                 DmmGamePlayerApiHelper.SetUserToken(session.SecureId, session.UniqueId, session.AccessToken);
                 DmmGamePlayerApiHelper.SetAgeCheckDone();
                 ConfigUtils.PushAccountObject(accountObject);
@@ -317,6 +322,8 @@ namespace Celestite.ViewModels.Pages
                         if (!string.IsNullOrEmpty(nickName))
                             acc.NickName = nickName;
                         acc.IsCurrent = true;
+                        if (accountObject.AutoLogin)
+                            acc.AutoLogin = true;
                     }
                     else
                         acc.IsCurrent = false;

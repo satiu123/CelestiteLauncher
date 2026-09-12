@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
@@ -202,6 +202,15 @@ namespace Celestite.Utils
                 _config = new LauncherConfig();
                 Save();
             }
+            // 自动迁移/修复：如果当前/最后登录账号保存了密码但未勾选自动登录，自动恢复为自动登录
+            if (TryGetLastLogin(out var lastLogin) && lastLogin != null)
+            {
+                if (lastLogin.SavePassword && !string.IsNullOrEmpty(lastLogin.Password) && !lastLogin.AutoLogin)
+                {
+                    lastLogin.AutoLogin = true;
+                    Save();
+                }
+            }
 
             // 问题修复
             if (_config.BaseSection.Locale.Contains('_'))
@@ -276,6 +285,7 @@ namespace Celestite.Utils
 #else
             {
                 var bytes = MemoryPackSerializer.Serialize(_config);
+                writeStream.SetLength(0);
                 writeStream.Write(bytes);
             }
 #endif

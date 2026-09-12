@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO.Hashing;
@@ -329,7 +329,7 @@ namespace Celestite.Configs
         [MemoryPackOrder(4)]
         public bool SavePassword { get; set; } = false;
         [MemoryPackOrder(5)]
-        public bool AutoLogin { get; set; } = false;
+        public bool AutoLogin { get; set; } = true;
         [MemoryPackOrder(6)]
         [EncryptedInternStringFormatter]
         public string UserId { get; set; } = string.Empty;

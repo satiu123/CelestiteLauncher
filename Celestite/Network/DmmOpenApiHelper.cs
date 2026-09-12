@@ -139,9 +139,13 @@ namespace Celestite.Network
 
         public static async UniTask<bool> CheckValidity(string loginSecureId, string loginSessionId, string accessToken)
         {
-            if (string.IsNullOrEmpty(loginSecureId) || string.IsNullOrEmpty(loginSessionId) || string.IsNullOrEmpty(accessToken))
+            if (string.IsNullOrEmpty(loginSecureId) || string.IsNullOrEmpty(loginSessionId))
             {
                 return false;
+            }
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                return await CheckValidity(loginSecureId, loginSessionId);
             }
             var isTokenValid = await CheckValidity(accessToken);
             if (!isTokenValid)

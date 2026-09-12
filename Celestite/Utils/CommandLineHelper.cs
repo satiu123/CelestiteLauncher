@@ -191,7 +191,8 @@ namespace Celestite.Utils
             }
             else
             {
-                if (ConfigUtils.TryGetLastLogin(out var accountObject) && accountObject!.AutoLogin)
+                if (ConfigUtils.TryGetLastLogin(out var accountObject) &&
+                    (accountObject!.AutoLogin || (accountObject.SavePassword && !string.IsNullOrEmpty(accountObject.Password))))
                 {
                     bool isValid = await DmmOpenApiHelper.CheckValidity(accountObject.LoginSecureId, accountObject.LoginSessionId, accountObject.AccessToken);
                     if (isValid)
